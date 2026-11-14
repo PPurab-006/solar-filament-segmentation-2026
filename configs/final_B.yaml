@@ -1,0 +1,34 @@
+# Final Submission B: ConvNeXt-Tiny (Plateau Rule)
+# Architecture: SMP Unet (tu-convnext_tiny, 3 channels with context), TTA-1
+# Postprocessing: Plateau Rule (tm=0.60, cr=2, tp=0.75, ma=300)
+
+ensemble: 1
+weights_path: "weights/r1_convnext_tiny_ema_weights.pt"
+tta_mode: 1
+
+model:
+  architecture: "Unet"
+  encoder_name: "tu-convnext_tiny"
+  encoder_weights: null
+  in_channels: 3
+  classes: 1
+
+preprocess:
+  off_limb_margin: 1.01
+
+inference:
+  tile_size: 512
+  stride: 256
+  blend_mode: "hann"
+  tta_mode: 1
+
+postprocess:
+  threshold: 0.60
+  close_radius: 2
+  bridge_gap: 0
+  max_rho: null
+  min_area: 300
+  peak_threshold: 0.75
+
+scorer:
+  enabled: false

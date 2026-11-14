@@ -1,0 +1,6 @@
+{
+  "model_family": "convnext_tiny",
+  "in_channels": 3,
+  "preprocessing_id": "zscore_v1",
+  "description": "Z-score intensity normalization with 3-channel sliding window context representation"
+}
