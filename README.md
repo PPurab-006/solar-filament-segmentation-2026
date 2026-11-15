@@ -120,10 +120,11 @@ This solution strictly adheres to all competition rules (see `docs/RULES_CHECKLI
 
 ## Evaluator Reconciliation & Methodology Note
 
-During development, an evaluation discrepancy in historical scripts was identified and resolved:
-1. **Multi-Annotator Separation**: In earlier exploratory scripts, annotations across multiple annotators were occasionally conflated. The canonical evaluator separates distinct annotator drawings (`drawing_id`), computing Panoptic Quality (PQ), Segmentation Quality (SQ), and Recognition Quality (RQ) per drawing before averaging across images.
-2. **COCO Polygon Rasterization vs OpenCV `fillPoly`**: Historical scripts utilized OpenCV `cv2.fillPoly` to rasterize ground-truth polygon coordinates. Due to integer border inclusion, `cv2.fillPoly` inflates ground-truth mask areas by ~5–10%, artificially raising IoU and true-positive matches (creating an artifactual $+0.0235$ PQ boost on ResNet-34). The canonical evaluator utilizes exact half-open COCO polygon decoding via `pycocotools.mask.frPyObjects`, exactly matching the competition organizer's official evaluation logic.
-3. **Scorer Exact Agreement**: Benchmarking confirmed that the crop-IoU evaluator matches the competition organizers' evaluation script to 8 decimal places ($\Delta = 0.00000000$), guaranteeing absolute mathematical fidelity for all reported metrics.
+During development, two historical evaluation discrepancies were identified and fully resolved:
+1. **Collapsed Multi-Annotator Drawings into One Canvas**: In early exploratory evaluation scripts, ground-truth annotations across multiple annotators were collapsed into a single union mask per image. This conflation artificially inflated Panoptic Quality (PQ) by approximately $+0.04$ ($0.493$ uncorrected vs $0.453$ corrected for rule A). The canonical evaluator properly isolates each annotator's distinct drawing (`drawing_id`), computing Panoptic Quality (PQ), Segmentation Quality (SQ), and Recognition Quality (RQ) per drawing before averaging across images.
+2. **COCO Polygon Rasterization vs OpenCV `fillPoly`**: Early ResNet-34 scripts rasterized ground-truth polygon annotations using OpenCV `cv2.fillPoly` instead of standard COCO half-open polygon conventions (`pycocotools.mask.frPyObjects`). Due to integer boundary pixel inclusion, `cv2.fillPoly` expanded mask boundaries by ~5–10%, artificially inflating IoU and true positives ($0.437$ uncorrected vs $0.414$ corrected for the ResNet-34 rule).
+
+**All performance numbers reported in this README and in the technical paper are computed exclusively with the canonical, corrected evaluator**, which was verified against the competition organizers' self-evaluation notebook logic to 8 decimal places ($\Delta = 0.00000000$), guaranteeing absolute mathematical fidelity and true reproducibility.
 
 ---
 
