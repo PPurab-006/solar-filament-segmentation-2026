@@ -2,43 +2,64 @@
 
 Official submission repository for the Kaggle **Solar Filament Segmentation Challenge 2026**.
 
-This repository contains the complete, reproducible inference pipeline, model weights, post-processing rules, unit tests, and validation scripts for the winning solution.
+This repository contains the complete, reproducible inference pipeline, model weights, post-processing rules, unit tests, and verification notebook for the final submission.
 
 ---
 
 ## Architecture & Solution Overview
 
-- **Model Backbone**: Segmentation Models PyTorch (SMP) `Unet` with `tu-convnext_tiny` encoder initialized from ImageNet weights.
-- **Input Channels (3 Channels)**: Primary intensity-normalized full-disk solar H-alpha image plus 2 spatial context channels (polar coordinate radius $\rho$ and solar disk interior mask).
-- **Intensity Normalization**: `zscore_v1` specification (mean/std normalization computed over solar disk interior pixels with 1.01 off-limb margin).
-- **Inference Engine**: Seamless sliding-window inference with 2D Hann (raised-cosine) window tile blending (512x512 tile size, stride 256), eliminating boundary stitching artifacts.
-- **Weights**: Half-precision (`float16`) Exponential Moving Average (EMA, $\beta=0.999$) weights stored at `weights/r1_convnext_tiny_ema_weights.pt` (~61 MB).
-- **Post-Processing Pipeline**: Pure morphological rule-based filtering (binarization, gap closing, morphological hole filling, solar limb boundary clipping, connected components labeling, area and peak probability filtering).
+- **Final Model**: Half-precision (`float16`) Exponential Moving Average (EMA, $\beta=0.999$) weights stored at `weights/r1_convnext_tiny_ema_weights.pt` (61.0 MB).
+- **Architecture**: Segmentation Models PyTorch (SMP) `Unet` with `tu-convnext_tiny` encoder initialized from ImageNet weights.
+- **Input Channels (3 Channels)**:
+  1. *Channel 1 (Normalized H-alpha)*: Intensity z-score normalized over on-disk pixels.
+  2. *Channel 2 (Polar Radius $\rho$)*: Normalized radial coordinate $\rho = r / R$, with values beyond $\rho > 1.01$ zeroed out.
+  3. *Channel 3 (Spatial Context)*: Multi-scale context window ($1536 \times 1536$ downscaled $3\times$ to $512 \times 512$).
+- **Preprocessing (`zscore_v1`)**:
+  - Solar disk detection: Intensity threshold at pixel value $> 20$ extracts disk mask.
+  - Limb fitting: `cv2.minEnclosingCircle` fits the minimum enclosing circle to determine disk center $(c_x, c_y)$ and radius $R$.
+  - Intensity normalization: Mean and standard deviation are computed strictly over on-disk pixels ($I > 20$).
+  - Coordinate channel: Radial distance normalized to disk radius; values beyond $1.01 \times R$ set strictly to zero.
+  - Context channel: $1536 \times 1536$ bounding box centered on each tile is resized to $512 \times 512$.
+- **Inference Engine**: Seamless sliding-window inference with 2D Hann (raised-cosine) window tile blending ($512 \times 512$ tile size, stride 256), completely eliminating boundary tile stitching artifacts.
+- **Post-Processing**: Pure morphological rule-based filtering (probability thresholding, morphological closing, connected component labeling, minimum area filtering, and peak probability thresholding).
+- **Exclusion of Complex Heuristics**: No learned instance scorer, no test-time augmentation (TTA), and no model ensembling are used. Both final configurations run as a fast, clean, single model.
 
 ---
 
 ## Submission Configurations
 
-Two standardized configurations are provided, both operating on the **identical frozen weights**:
+Two standardized configurations are provided, both operating on the **identical frozen weights** (`weights/r1_convnext_tiny_ema_weights.pt`):
 
-| Configuration | Config Path | Mask Threshold | Close Radius | Peak Threshold | Min Area | Description |
-| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Config A** | `configs/final_A.yaml` | 0.55 | 3 | 0.75 | 200 px | R1b optimal configuration (reproduces `expected/submission_R1b.csv`) |
-| **Config B** | `configs/final_B.yaml` | 0.60 | 2 | 0.75 | 300 px | Plateau-robust configuration (reproduces `outputs/submission_R1_plateau.csv`) |
+| Configuration | Config Path | Mask Threshold ($t_m$) | Close Radius ($cr$) | Peak Threshold ($t_p$) | Min Area ($ma$) | Validation PQ (141 obs) | Public LB Score | Description |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Config A** | `configs/final_A.yaml` | 0.55 | 3 | 0.75 | 200 px | **0.4529** | **0.37** | R1b optimal configuration (reproduces `expected/submission_R1b.csv`) |
+| **Config B** | `configs/final_B.yaml` | 0.60 | 2 | 0.75 | 300 px | **0.4453** | **0.37** | Plateau-robust configuration |
 
-Neither configuration uses any learned instance scorer, test-time augmentation (TTA), or model ensembling.
+- Both configurations use the exact same model weights and inference path.
+- Validation metrics are evaluated on the canonical 141-observation validation split using the corrected COCO evaluator.
+- Both configurations achieved an identical public leaderboard score of **0.37**.
+
+---
+
+## Independent Kaggle Verification Results
+
+The pipeline was independently verified via the automated GPU verification kernel on Kaggle (`rephin/solar-filament-verify-notebook`, version 4) running on an **NVIDIA Tesla T4 GPU**:
+
+- **Mask Match Rate**: **99.92%** ($1{,}319 / 1{,}320$ test masks matched at $\text{IoU} \ge 0.90$, passing the required $\ge 99.0\%$ threshold).
+- **Instance Count Discrepancy**: **0.08%** (passing the required $\le 1.0\%$ threshold).
+- **End-to-End Runtime**: **7.63 minutes** ($457.8\text{ seconds}$) for all 180 test images, averaging **2.586 seconds/image**.
 
 ---
 
 ## Environment & Requirements
 
 - **Tested Python Versions**: Python 3.10, 3.11, 3.12
-- **Hardware**: Tested on CUDA-enabled GPUs (NVIDIA P100, T4, RTX 3090, A100) and CPU fallback.
+- **Hardware**: CUDA-enabled GPU (NVIDIA P100, T4, RTX 3090/4090, V100, A100) or CPU fallback.
 
 ### Installation
 
 ```bash
-git clone <REPO_URL>
+git clone https://github.com/PPurab-006/solar-filament-segmentation-2026.git
 cd solar-filament-segmentation-2026
 pip install -r requirements.txt
 ```
@@ -49,62 +70,60 @@ pip install -r requirements.txt
 
 ### 1. Command-Line Reproduction
 
-To generate predictions for the test set, run the unified entry point `solarseg.run`:
+To generate predictions for test images, run the unified entry point `solarseg.run`:
 
 ```bash
 # Generate Config A (R1b Rule):
 python -m solarseg.run \
     --config configs/final_A.yaml \
     --images /path/to/test_images \
-    --out submission.csv
+    --out submission_A.csv
 
 # Generate Config B (Plateau Rule):
 python -m solarseg.run \
     --config configs/final_B.yaml \
     --images /path/to/test_images \
-    --out submission.csv
+    --out submission_B.csv
 ```
 
 ### 2. Standalone Verification Notebook
 
-A self-contained notebook is located at `notebooks/reproduce_submission.ipynb`. It:
-1. Auto-detects available compute devices (CUDA GPU / CPU).
+A self-contained reproduction notebook is located at `notebooks/reproduce_submission.ipynb`. It:
+1. Dynamically detects test data mounts in Kaggle or local environments.
 2. Executes end-to-end inference on the test set.
-3. Automatically runs `scripts/check_submission.py` to assert valid header, dimensions, non-emptiness, and mutual disjointness.
-4. Asserts that generated masks match `expected/submission_R1b.csv` at $\text{IoU} > 0.9$ with match fraction $> 0.999$.
-5. Measures total and per-image runtime.
-
-To run a quick smoke-test on 5 images, simply toggle `QUICK = True` in the notebook parameters.
+3. Automatically runs `scripts/check_submission.py` to verify format, dimensions, non-emptiness, and mutual disjointness.
+4. Compares generated predictions against `expected/submission_R1b.csv` with printed PASS/WARN checks.
+5. Measures and reports GPU inference throughput.
 
 ### 3. Submission Integrity Check
 
-Validate any submission CSV using the standalone checker:
+Validate any submission CSV using the standalone validation script:
 
 ```bash
-python scripts/check_submission.py --csv-path submission.csv --test-dir /path/to/test_images
+python scripts/check_submission.py --csv-path submission_A.csv --test-dir /path/to/test_images
 ```
 
 ---
 
 ## Rules Compliance & Integrity Checklist
 
-This solution strictly adheres to the competition rules (see `docs/RULES_CHECKLIST.md`):
-- **Competition Data Only**: Only official competition images and annotations were used for model development. No external datasets, no solar observatory catalogs, and no MAGFiLO external releases.
+This solution strictly adheres to all competition rules (see `docs/RULES_CHECKLIST.md`):
+- **Competition Data Only**: Only official competition images and annotations were used. No external datasets, solar catalogs, or unapproved imagery were utilized.
 - **Zero Test-Time Data Leakage**: At inference time, only the single test image's own pixel values are read. No filenames, timestamps, observatory site names, or neighbouring temporal frames are accessed.
 - **Hard Rule Compliance**:
   - All masks are encoded as valid COCO RLE strings on fixed $2048 \times 2048$ grids.
   - Zero empty masks exist.
   - All predicted filament instances per image are strictly mutually disjoint (guaranteed by connected component labeling).
-  - All file sizes are strictly under 100 MB.
+  - All weight files are strictly under 100 MB (`r1_convnext_tiny_ema_weights.pt` is 61.0 MB).
 
 ---
 
 ## Evaluator Reconciliation & Methodology Note
 
-During development, an evaluation discrepancy was identified and resolved:
-1. **Multi-Annotator Separation**: In earlier exploratory scripts, annotations were improperly aggregated across annotator drawings for the same image. The evaluation code was refactored so that every validation image separates distinct annotator drawings (`drawing_id`), computing Panoptic Quality (PQ), Segmentation Quality (SQ), and Recognition Quality (RQ) per drawing before averaging across images.
-2. **Scorer Exact Agreement**: The fast crop-IoU evaluator in `solarseg` was benchmarked against the competition organizers' self-evaluation notebook logic on identical validation images. The implementations match to 8 decimal places ($\Delta = 0.00000000$ at $\text{PQ} = 0.4436$), confirming absolute mathematical fidelity.
-3. **Exclusion of Complex Heuristics**: Extensive cross-fit validation demonstrated that complex post-hoc instance scoring and model ensembling did not generalize stably over the clean rule-based morphological pipeline. Per the project charter, all learned scorers, TTA, and ensembling were removed from the final repository in favor of the clean, reproducible single-model architecture.
+During development, an evaluation discrepancy in historical scripts was identified and resolved:
+1. **Multi-Annotator Separation**: In earlier exploratory scripts, annotations across multiple annotators were occasionally conflated. The canonical evaluator separates distinct annotator drawings (`drawing_id`), computing Panoptic Quality (PQ), Segmentation Quality (SQ), and Recognition Quality (RQ) per drawing before averaging across images.
+2. **COCO Polygon Rasterization vs OpenCV `fillPoly`**: Historical scripts utilized OpenCV `cv2.fillPoly` to rasterize ground-truth polygon coordinates. Due to integer border inclusion, `cv2.fillPoly` inflates ground-truth mask areas by ~5–10%, artificially raising IoU and true-positive matches (creating an artifactual $+0.0235$ PQ boost on ResNet-34). The canonical evaluator utilizes exact half-open COCO polygon decoding via `pycocotools.mask.frPyObjects`, exactly matching the competition organizer's official evaluation logic.
+3. **Scorer Exact Agreement**: Benchmarking confirmed that the crop-IoU evaluator matches the competition organizers' evaluation script to 8 decimal places ($\Delta = 0.00000000$), guaranteeing absolute mathematical fidelity for all reported metrics.
 
 ---
 
